@@ -17,6 +17,12 @@ type SpiceModelsResponse = {
 };
 
 export function buildSpiceModelDefinition(id = SPICE_DEFAULT_MODEL_ID): ModelDefinitionConfig {
+  const compat = {
+    supportsDeveloperRole: true,
+    supportsUsageInStreaming: true,
+    supportsStrictMode: true,
+    supportsEmptyStopRetry: true,
+  };
   return {
     id,
     name: id === SPICE_DEFAULT_MODEL_ID ? "Spice Model" : id,
@@ -25,6 +31,7 @@ export function buildSpiceModelDefinition(id = SPICE_DEFAULT_MODEL_ID): ModelDef
     cost: SPICE_DEFAULT_COST,
     contextWindow: 128_000,
     maxTokens: 8_192,
+    compat,
   };
 }
 

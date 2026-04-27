@@ -71,6 +71,7 @@ export function resolveEmbeddedAgentStreamFn(params: {
   model: EmbeddedRunAttemptParams["model"];
   resolvedApiKey?: string;
   authStorage?: { getApiKey(provider: string): Promise<string | undefined> };
+  config?: EmbeddedRunAttemptParams["config"] | undefined;
 }): StreamFn {
   if (params.providerStreamFn) {
     const inner = params.providerStreamFn;
@@ -117,25 +118,47 @@ export function resolveEmbeddedAgentStreamFn(params: {
     return createAnthropicVertexStreamFnForModel(params.model);
   }
 
-  if (params.currentStreamFn === undefined || params.currentStreamFn === streamSimple) {
-    const boundaryAwareStreamFn = createBoundaryAwareStreamFnForModel(params.model);
-    if (boundaryAwareStreamFn) {
-      if (params.authStorage || params.resolvedApiKey) {
-        const { authStorage, model, resolvedApiKey } = params;
-        return async (m, context, options) => {
-          const apiKey = await resolveEmbeddedAgentApiKey({
-            provider: model.provider,
-            resolvedApiKey,
-            authStorage,
-          });
-          return boundaryAwareStreamFn(m, context, {
-            ...options,
-            apiKey: apiKey ?? options?.apiKey,
-          });
-        };
-      }
-      return boundaryAwareStreamFn;
+  // Always prefer the boundary-aware transport when one exists for this model's api.
+  // This ensures providers with a custom apiKeyHeader (e.g. x-api-key for Spice) go
+  // through the correct transport instead of the session-inherited streamSimple wrapper.
+  const boundaryAwareStreamFn = createBoundaryAwareStreamFnForModel(params.model);
+  if (boundaryAwareStreamFn) {
+    if (params.authStorage || params.resolvedApiKey) {
+      const { authStorage, model, resolvedApiKey, config } = params;
+      return async (m, context, options) => {
+        const apiKey = await resolveEmbeddedAgentApiKey({
+          provider: model.provider,
+          resolvedApiKey,
+          authStorage,
+        });
+        let authedModel = m;
+        if (apiKey) {
+          const providerCfg = (
+            config?.models?.providers as Record<string, { apiKeyHeader?: string }> | undefined
+          )?.[m.provider];
+          const apiKeyHeader = providerCfg?.apiKeyHeader?.trim();
+          if (apiKeyHeader && apiKeyHeader.toLowerCase() !== "authorization") {
+            authedModel = {
+              ...m,
+              headers: {
+                ...(m.headers ?? {}),
+                [apiKeyHeader]: apiKey,
+                Authorization: null as unknown as string,
+              },
+            };
+          }
+        }
+        return boundaryAwareStreamFn(authedModel, context, {
+          ...options,
+          apiKey: apiKey ?? options?.apiKey,
+        });
+      };
     }
+    return boundaryAwareStreamFn;
+  }
+
+  if (params.currentStreamFn === undefined || params.currentStreamFn === streamSimple) {
+    // No boundary-aware transport; fall through to currentStreamFn below.
   }
 
   return currentStreamFn;

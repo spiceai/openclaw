@@ -1415,6 +1415,7 @@ export async function runEmbeddedAttempt(
         model: params.model,
         resolvedApiKey: params.resolvedApiKey,
         authStorage: params.authStorage,
+        config: params.config,
       });
       const providerTextTransforms = resolveProviderTextTransforms({
         provider: params.provider,

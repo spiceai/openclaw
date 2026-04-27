@@ -1760,11 +1760,12 @@ export function buildOpenAICompletionsParams(
   if (compat.supportsStore) {
     params.store = false;
   }
-  if (options?.maxTokens) {
+  const effectiveMaxTokens = options?.maxTokens || (model as { maxTokens?: number }).maxTokens;
+  if (effectiveMaxTokens) {
     if (compat.maxTokensField === "max_tokens") {
-      params.max_tokens = options.maxTokens;
+      params.max_tokens = effectiveMaxTokens;
     } else {
-      params.max_completion_tokens = options.maxTokens;
+      params.max_completion_tokens = effectiveMaxTokens;
     }
   }
   if (options?.temperature !== undefined) {
