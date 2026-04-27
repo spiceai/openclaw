@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
@@ -191,15 +192,28 @@ async function runFallbackCandidate<T>(params: {
   model: string;
   options?: ModelFallbackRunOptions;
 }): Promise<{ ok: true; result: T } | { ok: false; error: unknown }> {
+  fs.appendFileSync(
+    "/tmp/spice-debug.log",
+    `[${new Date().toISOString()}] runFallbackCandidate START provider=${params.provider} model=${params.model}\n`,
+  );
   try {
     const result = params.options
       ? await params.run(params.provider, params.model, params.options)
       : await params.run(params.provider, params.model);
+    fs.appendFileSync(
+      "/tmp/spice-debug.log",
+      `[${new Date().toISOString()}] runFallbackCandidate SUCCESS provider=${params.provider} model=${params.model}\n`,
+    );
     return {
       ok: true,
       result,
     };
   } catch (err) {
+    const e = err as Record<string, unknown>;
+    fs.appendFileSync(
+      "/tmp/spice-debug.log",
+      `[${new Date().toISOString()}] runFallbackCandidate ERROR provider=${params.provider} model=${params.model} status=${String(e?.status)} msg=${String(err)}\n`,
+    );
     // Normalize abort-wrapped rate-limit errors (e.g. Google Vertex RESOURCE_EXHAUSTED)
     // so they become FailoverErrors and continue the fallback loop instead of aborting.
     const normalizedFailover = coerceToFailoverError(err, {

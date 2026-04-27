@@ -9,6 +9,7 @@ import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   buildProviderMissingAuthMessageWithPlugin,
+  normalizeProviderConfigWithPlugin,
   resolveProviderSyntheticAuthWithPlugin,
   shouldDeferProviderSyntheticProfileAuthWithPlugin,
 } from "../plugins/provider-runtime.js";
@@ -782,29 +783,58 @@ export function applyAuthHeaderOverride<T extends Model<Api>>(
   if (!auth?.apiKey) {
     return model;
   }
-  // Reject synthetic marker values that are not real credentials.
   if (isNonSecretApiKeyMarker(auth.apiKey)) {
     return model;
   }
-  const providerConfig = resolveProviderConfig(cfg, model.provider);
-  if (!providerConfig?.authHeader) {
+  const rawProviderConfig = resolveProviderConfig(cfg, model.provider);
+
+  // --- Case 1: explicit Authorization: Bearer injection (authHeader: true) ---
+  if (rawProviderConfig?.authHeader) {
+    const headers: Record<string, string> = {};
+    if (model.headers) {
+      for (const [key, value] of Object.entries(model.headers)) {
+        if (normalizeOptionalLowercaseString(key) !== "authorization") {
+          headers[key] = value;
+        }
+      }
+    }
+    headers.Authorization = `Bearer ${auth.apiKey}`;
+    return { ...model, headers };
+  }
+
+  // --- Case 2: custom API-key header (e.g. x-api-key for Spice) ---
+  const normalizedProviderConfig = !rawProviderConfig?.apiKeyHeader
+    ? normalizeProviderConfigWithPlugin({
+        provider: model.provider,
+        config: cfg,
+        context: {
+          provider: model.provider,
+          providerConfig: rawProviderConfig ?? { baseUrl: "", models: [] },
+        },
+      })
+    : undefined;
+  const effectiveProviderConfig = normalizedProviderConfig ?? rawProviderConfig;
+  const apiKeyHeader = effectiveProviderConfig?.apiKeyHeader?.trim();
+  if (!apiKeyHeader) {
     return model;
   }
 
-  // Strip any existing authorization header (case-insensitive) before
-  // injecting the canonical one so we don't produce a comma-joined value.
+  // Inject the resolved key under the custom header and suppress the OpenAI
+  // SDK's auto-generated Authorization: Bearer header (which the cloud endpoint
+  // would reject).
+  const normalizedApiKeyHeader = normalizeLowercaseStringOrEmpty(apiKeyHeader);
   const headers: Record<string, string> = {};
   if (model.headers) {
     for (const [key, value] of Object.entries(model.headers)) {
-      if (normalizeOptionalLowercaseString(key) !== "authorization") {
+      const normalizedKey = normalizeLowercaseStringOrEmpty(key);
+      if (normalizedKey !== "authorization" && normalizedKey !== normalizedApiKeyHeader) {
         headers[key] = value;
       }
     }
   }
-  headers.Authorization = `Bearer ${auth.apiKey}`;
+  headers[apiKeyHeader] = auth.apiKey;
+  // null causes the OpenAI SDK to omit the Authorization header entirely.
+  headers.Authorization = null as unknown as string;
 
-  return {
-    ...model,
-    headers,
-  };
+  return { ...model, headers };
 }

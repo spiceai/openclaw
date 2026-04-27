@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { appendFileSync } from "node:fs";
 import { agentCommandFromIngress } from "../agents/agent-command.js";
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
@@ -171,6 +172,10 @@ export class EmbeddedTuiBackend implements TuiBackend {
     if (this.unsubscribe) {
       return;
     }
+    appendFileSync(
+      "/tmp/spice-debug.log",
+      `[${new Date().toISOString()}] EmbeddedTuiBackend start\n`,
+    );
     setEmbeddedMode(true);
     // Suppress console output from logError/logInfo that would pollute the TUI.
     // File logger (getLogger()) still captures everything via logger.ts:35.
@@ -181,6 +186,10 @@ export class EmbeddedTuiBackend implements TuiBackend {
     this.unsubscribe = onAgentEvent((evt) => {
       void this.handleAgentEvent(evt);
     });
+    appendFileSync(
+      "/tmp/spice-debug.log",
+      `[${new Date().toISOString()}] EmbeddedTuiBackend subscribed to agent events, firing onConnected\n`,
+    );
     queueMicrotask(() => {
       this.onConnected?.();
     });
@@ -558,8 +567,16 @@ export class EmbeddedTuiBackend implements TuiBackend {
     timeoutMs?: number;
     controller: AbortController;
   }) {
+    appendFileSync(
+      "/tmp/spice-debug.log",
+      `[${new Date().toISOString()}] runTurn START runId=${params.runId} session=${params.sessionKey} thinking=${params.thinking ?? "default"}\n`,
+    );
     try {
       const { cfg, canonicalKey, entry } = loadSessionEntry(params.sessionKey);
+      appendFileSync(
+        "/tmp/spice-debug.log",
+        `[${new Date().toISOString()}] runTurn session entry loaded sessionId=${entry?.sessionId ?? "none"}\n`,
+      );
       const result = await agentCommandFromIngress(
         {
           message: injectTimestamp(params.message, timestampOptsFromConfig(cfg)),
@@ -579,6 +596,10 @@ export class EmbeddedTuiBackend implements TuiBackend {
         },
         silentRuntime,
         this.deps,
+      );
+      appendFileSync(
+        "/tmp/spice-debug.log",
+        `[${new Date().toISOString()}] runTurn agentCommandFromIngress done runId=${params.runId}\n`,
       );
       const run = this.runs.get(params.runId);
       if (!run) {
@@ -613,10 +634,18 @@ export class EmbeddedTuiBackend implements TuiBackend {
         return;
       }
       if (params.controller.signal.aborted) {
+        appendFileSync(
+          "/tmp/spice-debug.log",
+          `[${new Date().toISOString()}] runTurn ABORTED runId=${params.runId}\n`,
+        );
         this.emitChatAborted(params.runId, run);
         return;
       }
       const errorMessage = error instanceof Error ? error.message : String(error);
+      appendFileSync(
+        "/tmp/spice-debug.log",
+        `[${new Date().toISOString()}] runTurn ERROR runId=${params.runId} error=${errorMessage}\n`,
+      );
       this.emitChatError(params.runId, run, errorMessage);
     } finally {
       this.runs.delete(params.runId);

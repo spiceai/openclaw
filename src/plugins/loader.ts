@@ -220,6 +220,10 @@ const MAX_PLUGIN_REGISTRY_CACHE_ENTRIES = 128;
 let pluginRegistryCacheEntryCap = MAX_PLUGIN_REGISTRY_CACHE_ENTRIES;
 const registryCache = new Map<string, CachedPluginState>();
 const inFlightPluginRegistryLoads = new Set<string>();
+// Stores the first snapshot registry loaded (activate=false, cache=false) so that
+// subsequent snapshot reads can reuse it as a superset instead of triggering another
+// full loadOpenClawPlugins. Cleared alongside the plugin loader cache.
+let lastSnapshotRegistryForReuse: PluginRegistry | undefined;
 const openAllowlistWarningCache = new Set<string>();
 const LAZY_RUNTIME_REFLECTION_KEYS = [
   "version",
@@ -241,6 +245,7 @@ export function clearPluginLoaderCache(): void {
   registryCache.clear();
   inFlightPluginRegistryLoads.clear();
   openAllowlistWarningCache.clear();
+  lastSnapshotRegistryForReuse = undefined;
   clearBundledRuntimeDependencyNodePaths();
   clearAgentHarnesses();
   clearCompactionProviders();
@@ -1073,6 +1078,31 @@ export function resolveRuntimePluginRegistry(
   // plugin registration is still in flight. Let direct loadOpenClawPlugins(...)
   // callers surface the hard error instead.
   if (isPluginRegistryLoadInFlight(options)) {
+    return undefined;
+  }
+  // Snapshot reads (activate=false, cache=false) are non-mutating lookups used
+  // by hook helpers like resolveProviderPluginsForHooks during normalizeProviders.
+  // When the active registry exists but its load options differ (e.g. different
+  // onlyPluginIds or compat flags), the active registry is still a safe superset:
+  // return it instead of triggering a synchronous loadOpenClawPlugins that can
+  // stall the event loop for tens of seconds loading 100+ bundled plugin modules.
+  if (options.activate === false && options.cache === false) {
+    const activeAsSuperset = getCompatibleActivePluginRegistry();
+    if (activeAsSuperset) {
+      return activeAsSuperset;
+    }
+    // Reuse the first snapshot registry as a superset for all subsequent snapshot
+    // reads. Snapshot loads iterate all candidates synchronously (discoverOpenClawPlugins,
+    // loadPluginManifestRegistry, module imports) and can stall the event loop for
+    // 50+ seconds if called for each provider individually in normalizeProviders.
+    if (lastSnapshotRegistryForReuse) {
+      return lastSnapshotRegistryForReuse;
+    }
+    // No registry available at all: return undefined rather than triggering a
+    // synchronous full plugin load. Hook helpers like resolveProviderPluginsForHooks
+    // gracefully return [] on undefined, so provider normalization is simply skipped
+    // until an activating load (the main startup loadOpenClawPlugins call) completes
+    // and sets the active registry for future snapshot reads to reuse.
     return undefined;
   }
   return loadOpenClawPlugins(options);

@@ -12,6 +12,7 @@ import {
   applyProviderResolvedTransportWithPlugin,
   buildProviderUnknownModelHintWithPlugin,
   clearProviderRuntimeHookCache,
+  normalizeProviderConfigWithPlugin,
   normalizeProviderTransportWithPlugin,
   prepareProviderDynamicModel,
   runProviderDynamicModel,
@@ -545,7 +546,21 @@ function resolveConfiguredFallbackModel(params: {
   runtimeHooks?: ProviderRuntimeHooks;
 }): Model<Api> | undefined {
   const { provider, modelId, cfg, agentDir, runtimeHooks } = params;
-  const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
+  const rawProviderConfig = resolveConfiguredProviderConfig(cfg, provider);
+  // Apply provider-specific config normalization so that fields like `apiKey` get
+  // transformed into the appropriate request auth config (e.g. Spice → x-api-key header).
+  const providerConfig =
+    rawProviderConfig && !rawProviderConfig.request?.auth
+      ? ((normalizeProviderConfigWithPlugin({
+          provider,
+          config: cfg,
+          context: {
+            provider,
+            providerConfig:
+              rawProviderConfig as import("../../config/types.models.js").ModelProviderConfig,
+          },
+        }) as InlineProviderConfig | undefined) ?? rawProviderConfig)
+      : rawProviderConfig;
   const configuredModel = providerConfig?.models?.find((candidate) => candidate.id === modelId);
   const providerHeaders = sanitizeModelHeaders(providerConfig?.headers, {
     stripSecretRefMarkers: true,

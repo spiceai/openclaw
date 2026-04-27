@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { appendFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -1050,13 +1050,36 @@ export async function runTui(opts: TuiOptions) {
     wasDisconnected = false;
     setConnectionStatus(isLocalMode ? "local ready" : "connected");
     void (async () => {
-      await refreshAgents();
+      if (isLocalMode) {
+        const dbg = (msg: string) =>
+          appendFileSync("/tmp/spice-debug.log", `[${new Date().toISOString()}] TUI ${msg}\n`);
+        dbg(`onConnected reconnected=${String(reconnected)}`);
+        if (!reconnected) {
+          setConnectionStatus("loading agents");
+          dbg(`loading agents`);
+        }
+        await refreshAgents();
+        if (!reconnected) {
+          const agentList = agents.map((a) => a.id).join(", ") || currentAgentId;
+          dbg(`agents loaded: ${agentList}`);
+          setConnectionStatus("loading history");
+          dbg(`loading history session=${currentSessionKey}`);
+        }
+      } else {
+        await refreshAgents();
+      }
       updateHeader();
       await loadHistory();
       setConnectionStatus(
         isLocalMode ? "local ready" : reconnected ? "gateway reconnected" : "gateway connected",
         4000,
       );
+      if (isLocalMode) {
+        appendFileSync(
+          "/tmp/spice-debug.log",
+          `[${new Date().toISOString()}] TUI ready session=${currentSessionKey}\n`,
+        );
+      }
       tui.requestRender();
       if (!autoMessageSent && autoMessage) {
         autoMessageSent = true;
@@ -1093,6 +1116,15 @@ export async function runTui(opts: TuiOptions) {
     tui.requestRender();
   };
 
+  if (isLocalMode) {
+    const dbg = (msg: string) =>
+      appendFileSync("/tmp/spice-debug.log", `[${new Date().toISOString()}] TUI ${msg}\n`);
+    dbg(`config loaded scope=${sessionScope} mainKey=${sessionMainKey}`);
+    dbg(`agent=${currentAgentId}`);
+    dbg(`session input="${initialSessionInput || "(default)"}" key=${currentSessionKey}`);
+    dbg(`mode=local-embedded`);
+    dbg(`starting TUI`);
+  }
   updateHeader();
   setConnectionStatus(isLocalMode ? "starting local runtime" : "connecting");
   updateFooter();

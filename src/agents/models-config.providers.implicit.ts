@@ -33,6 +33,16 @@ const PROVIDER_IMPLICIT_MERGERS: Partial<
   >
 > = {
   ollama: ({ implicit }) => implicit,
+  // The catalog run applies plugin-config endpoint precedence; its baseUrl and
+  // request.auth are authoritative. Let existing config win on everything else
+  // so user customizations (models list, api overrides) survive.
+  spice: ({ implicit, existing }) => ({
+    ...implicit,
+    ...existing,
+    baseUrl: implicit.baseUrl,
+    // Preserve catalog auth when user config has no explicit request override.
+    ...(existing?.request ? {} : { request: implicit.request }),
+  }),
 };
 
 const PLUGIN_DISCOVERY_ORDERS = ["simple", "profile", "paired", "late"] as const;
@@ -52,13 +62,21 @@ type ImplicitProviderContext = ImplicitProviderParams & {
   resolveProviderAuth: ProviderAuthResolver;
 };
 
+// Default timeout for non-live mode. Providers with internal timeouts (Ollama, LMStudio)
+// use ~5s; this cap prevents plugins without internal timeouts from stalling indefinitely.
+const NON_LIVE_PROVIDER_CATALOG_TIMEOUT_MS = 10_000;
+
 function resolveLiveProviderCatalogTimeoutMs(env: NodeJS.ProcessEnv): number | null {
   const live =
     env.OPENCLAW_LIVE_TEST === "1" || env.OPENCLAW_LIVE_GATEWAY === "1" || env.LIVE === "1";
-  if (!live) {
-    return null;
-  }
   const raw = env.OPENCLAW_LIVE_PROVIDER_DISCOVERY_TIMEOUT_MS?.trim();
+  if (!live) {
+    if (!raw) {
+      return NON_LIVE_PROVIDER_CATALOG_TIMEOUT_MS;
+    }
+    const parsed = Number.parseInt(raw, 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : NON_LIVE_PROVIDER_CATALOG_TIMEOUT_MS;
+  }
   if (!raw) {
     return 15_000;
   }
@@ -204,56 +222,66 @@ async function resolvePluginImplicitProviders(
   const byOrder = groupPluginDiscoveryProvidersByOrder(providers);
   const discovered: Record<string, ProviderConfig> = {};
   const catalogConfig = buildPluginCatalogConfig(ctx);
-  for (const provider of byOrder[order]) {
-    const resolveCatalogProviderApiKey = (providerId?: string) => {
-      const resolvedProviderId = providerId?.trim() || provider.id;
-      const resolved = ctx.resolveProviderApiKey(resolvedProviderId);
-      if (resolved.apiKey) {
-        return resolved;
-      }
+  const timeoutMs = resolveLiveProviderCatalogTimeoutMs(ctx.env);
 
-      if (
-        !findNormalizedProviderValue(
-          {
-            [provider.id]: true,
-            ...Object.fromEntries((provider.aliases ?? []).map((alias) => [alias, true])),
-            ...Object.fromEntries((provider.hookAliases ?? []).map((alias) => [alias, true])),
-          },
-          resolvedProviderId,
-        )
-      ) {
-        return resolved;
-      }
+  // Run all provider catalog calls concurrently so N providers timing out costs
+  // max(timeouts) instead of sum(timeouts). Merge results in original order to
+  // preserve provider precedence.
+  const catalogResults = await Promise.all(
+    byOrder[order].map((provider) => {
+      const resolveCatalogProviderApiKey = (providerId?: string) => {
+        const resolvedProviderId = providerId?.trim() || provider.id;
+        const resolved = ctx.resolveProviderApiKey(resolvedProviderId);
+        if (resolved.apiKey) {
+          return resolved;
+        }
 
-      const synthetic = provider.resolveSyntheticAuth?.({
-        config: catalogConfig,
-        provider: resolvedProviderId,
-        providerConfig: catalogConfig.models?.providers?.[resolvedProviderId],
-      });
-      const syntheticApiKey = synthetic?.apiKey?.trim();
-      if (!syntheticApiKey) {
-        return resolved;
-      }
+        if (
+          !findNormalizedProviderValue(
+            {
+              [provider.id]: true,
+              ...Object.fromEntries((provider.aliases ?? []).map((alias) => [alias, true])),
+              ...Object.fromEntries((provider.hookAliases ?? []).map((alias) => [alias, true])),
+            },
+            resolvedProviderId,
+          )
+        ) {
+          return resolved;
+        }
 
-      return {
-        apiKey: isNonSecretApiKeyMarker(syntheticApiKey)
-          ? syntheticApiKey
-          : resolveNonEnvSecretRefApiKeyMarker("file"),
-        discoveryApiKey: undefined,
+        const synthetic = provider.resolveSyntheticAuth?.({
+          config: catalogConfig,
+          provider: resolvedProviderId,
+          providerConfig: catalogConfig.models?.providers?.[resolvedProviderId],
+        });
+        const syntheticApiKey = synthetic?.apiKey?.trim();
+        if (!syntheticApiKey) {
+          return resolved;
+        }
+
+        return {
+          apiKey: isNonSecretApiKeyMarker(syntheticApiKey)
+            ? syntheticApiKey
+            : resolveNonEnvSecretRefApiKeyMarker("file"),
+          discoveryApiKey: undefined,
+        };
       };
-    };
 
-    const result = await runProviderCatalogWithTimeout({
-      provider,
-      config: catalogConfig,
-      agentDir: ctx.agentDir,
-      workspaceDir: ctx.workspaceDir,
-      env: ctx.env,
-      resolveProviderApiKey: resolveCatalogProviderApiKey,
-      resolveProviderAuth: (providerId, options) =>
-        ctx.resolveProviderAuth(providerId?.trim() || provider.id, options),
-      timeoutMs: resolveLiveProviderCatalogTimeoutMs(ctx.env),
-    });
+      return runProviderCatalogWithTimeout({
+        provider,
+        config: catalogConfig,
+        agentDir: ctx.agentDir,
+        workspaceDir: ctx.workspaceDir,
+        env: ctx.env,
+        resolveProviderApiKey: resolveCatalogProviderApiKey,
+        resolveProviderAuth: (providerId, options) =>
+          ctx.resolveProviderAuth(providerId?.trim() || provider.id, options),
+        timeoutMs,
+      }).then((result) => ({ provider, result }));
+    }),
+  );
+
+  for (const { provider, result } of catalogResults) {
     if (!result) {
       continue;
     }
@@ -367,10 +395,8 @@ export async function resolveImplicitProviders(
   });
 
   for (const order of PLUGIN_DISCOVERY_ORDERS) {
-    mergeImplicitProviderSet(
-      providers,
-      await resolvePluginImplicitProviders(context, discoveryProviders, order),
-    );
+    const result = await resolvePluginImplicitProviders(context, discoveryProviders, order);
+    mergeImplicitProviderSet(providers, result);
   }
 
   return providers;

@@ -1,0 +1,45 @@
+{
+  "id": "spice",
+  "enabledByDefault": true,
+  "providers": ["spice"],
+  "providerAuthEnvVars": {
+    "spice": ["SPICE_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "spice",
+      "method": "api-key",
+      "choiceId": "spice-api-key",
+      "choiceLabel": "Spice API key",
+      "groupId": "spice",
+      "groupLabel": "Spice",
+      "groupHint": "AI gateway for enterprise data",
+      "optionKey": "spiceApiKey",
+      "cliFlag": "--spice-api-key",
+      "cliOption": "--spice-api-key <key>",
+      "cliDescription": "Spice API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "endpoint": {
+        "type": "string"
+      },
+      "apiKey": {
+        "type": "string"
+      }
+    }
+  },
+  "uiHints": {
+    "endpoint": {
+      "label": "Endpoint",
+      "help": "Base URL of the Spice AI instance (e.g. http://localhost:8090/v1 or https://us-east-1-prod-aws-data.spiceai.io/v1). The /chat/completions path is appended automatically."
+    },
+    "apiKey": {
+      "label": "API Key",
+      "help": "API key for the Spice AI instance. Can also be set via the SPICE_API_KEY environment variable."
+    }
+  }
+}

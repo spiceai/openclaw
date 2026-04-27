@@ -120,6 +120,9 @@ export type ModelProviderConfig = {
   injectNumCtxForOpenAICompat?: boolean;
   headers?: Record<string, SecretInput>;
   authHeader?: boolean;
+  /** When set, the resolved API key is sent under this HTTP header name instead of
+   *  the standard `Authorization: Bearer` header (e.g. `"x-api-key"` for Spice). */
+  apiKeyHeader?: string;
   request?: ConfiguredModelProviderRequest;
   models: ModelDefinitionConfig[];
 };

@@ -1,3 +1,4 @@
+import { appendFileSync } from "node:fs";
 import type { TUI } from "@mariozechner/pi-tui";
 import { resolveSessionInfoModelSelection } from "../agents/model-selection-display.js";
 import type { SessionsPatchResult } from "../gateway/protocol/index.js";
@@ -286,6 +287,10 @@ export function createSessionActions(context: SessionActionContext) {
   };
 
   const loadHistory = async () => {
+    let loadedMsgCount = 0;
+    const dbg = (msg: string) =>
+      appendFileSync("/tmp/spice-debug.log", `[${new Date().toISOString()}] loadHistory ${msg}\n`);
+    dbg(`start session=${state.currentSessionKey} agent=${state.currentAgentId}`);
     try {
       const history = await client.loadHistory({
         sessionKey: state.currentSessionKey,
@@ -299,6 +304,10 @@ export function createSessionActions(context: SessionActionContext) {
         verboseLevel?: string;
         traceLevel?: string;
       };
+      loadedMsgCount = (record.messages ?? []).length;
+      dbg(
+        `fetched sessionId=${record.sessionId ?? "none"} messages=${loadedMsgCount} thinkingLevel=${record.thinkingLevel ?? "default"}`,
+      );
       state.currentSessionId = typeof record.sessionId === "string" ? record.sessionId : null;
       state.sessionInfo.thinkingLevel = record.thinkingLevel ?? state.sessionInfo.thinkingLevel;
       state.sessionInfo.fastMode = record.fastMode ?? state.sessionInfo.fastMode;
@@ -362,6 +371,18 @@ export function createSessionActions(context: SessionActionContext) {
       chatLog.addSystem(`history failed: ${String(err)}`);
     }
     await refreshSessionInfo();
+    const modelLabel = state.sessionInfo.model
+      ? state.sessionInfo.modelProvider
+        ? `${state.sessionInfo.modelProvider}/${state.sessionInfo.model}`
+        : state.sessionInfo.model
+      : null;
+    dbg(`refreshed model=${modelLabel ?? "unknown"} agent=${state.currentAgentId}`);
+    const initParts: string[] = [
+      `agent: ${state.currentAgentId}`,
+      ...(modelLabel ? [`model: ${modelLabel}`] : []),
+      `${loadedMsgCount} message${loadedMsgCount !== 1 ? "s" : ""} in history`,
+    ];
+    chatLog.addSystem(initParts.join("  ·  "));
     tui.requestRender();
   };
 

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import * as fs from "node:fs";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import {
   calculateCost,
@@ -1147,11 +1148,39 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
         if (nextParams !== undefined) {
           params = nextParams as typeof params;
         }
+        fs.appendFileSync(
+          "/tmp/spice-debug.log",
+          `[${new Date().toISOString()}] TRANSPORT provider=${String(model.provider)} model=${String(model.id)} baseUrl=${String(model.baseUrl)} apiKey=${apiKey ? apiKey.slice(0, 8) + "..." : "(none)"} headers=${JSON.stringify(model.headers ?? {})}\n`,
+        );
+        if (model.provider === "spice") {
+          fs.appendFileSync("/tmp/spice-debug.log", `params=${JSON.stringify(params, null, 2)}\n`);
+        }
         const responseStream = (await client.chat.completions.create(params as never, {
           signal: options?.signal,
         })) as unknown as AsyncIterable<ChatCompletionChunk>;
         stream.push({ type: "start", partial: output as never });
-        await processOpenAICompletionsStream(responseStream, output, model, stream);
+        if (model.provider === "spice") {
+          const wrappedStream = (async function* () {
+            let chunkCount = 0;
+            for await (const chunk of responseStream) {
+              chunkCount++;
+              if (chunkCount <= 3) {
+                fs.appendFileSync(
+                  "/tmp/spice-debug.log",
+                  `chunk[${chunkCount}]=${JSON.stringify(chunk)}\n`,
+                );
+              }
+              yield chunk;
+            }
+            fs.appendFileSync(
+              "/tmp/spice-debug.log",
+              `stream done totalChunks=${chunkCount} stopReason=${output.stopReason}\n`,
+            );
+          })() as unknown as AsyncIterable<ChatCompletionChunk>;
+          await processOpenAICompletionsStream(wrappedStream, output, model, stream);
+        } else {
+          await processOpenAICompletionsStream(responseStream, output, model, stream);
+        }
         if (options?.signal?.aborted) {
           throw new Error("Request was aborted");
         }
@@ -1160,6 +1189,10 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
       } catch (error) {
         output.stopReason = options?.signal?.aborted ? "aborted" : "error";
         output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+        fs.appendFileSync(
+          "/tmp/spice-debug.log",
+          `[${new Date().toISOString()}] ERROR provider=${String(model.provider)}/${String(model.id)}: ${String(output.errorMessage)}\n`,
+        );
         stream.push({ type: "error", reason: output.stopReason as never, error: output as never });
         stream.end();
       }
