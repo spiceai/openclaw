@@ -1651,7 +1651,7 @@
     "jiti": "^2.6.1",
     "json5": "^2.2.3",
     "jszip": "^3.10.1",
-    "markdown-it": "14.1.1",
+    "markdown-it": "14.2.0",
     "openai": "^6.34.0",
     "osc-progress": "^0.3.0",
     "proxy-agent": "^8.0.1",
